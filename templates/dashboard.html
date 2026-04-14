@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>DefectVision — Dashboard</title>
+  <link rel="stylesheet" href="/static/css/style.css"/>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <nav class="nav">
+    <span class="nav-brand">⬡ DefectVision</span>
+    <div class="nav-links">
+      <a href="/">Live Feed</a>
+      <a href="/dashboard" class="active">Dashboard</a>
+    </div>
+  </nav>
+
+  <main class="container">
+
+    <!-- Stat cards -->
+    <div class="stats-row" id="stats-row">
+      <div class="stat-card"><div class="stat-label">Total Detections</div><div class="stat-val" id="s-total">—</div></div>
+      <div class="stat-card"><div class="stat-label">Unique Classes</div><div class="stat-val" id="s-classes">—</div></div>
+      <div class="stat-card"><div class="stat-label">Top Class</div><div class="stat-val" id="s-top">—</div></div>
+    </div>
+
+    <div class="grid-2 mt">
+      <!-- Bar chart -->
+      <section class="card">
+        <div class="card-header"><h2>Detections by Class</h2></div>
+        <canvas id="bar-chart" height="220"></canvas>
+      </section>
+
+      <!-- Recent detections table -->
+      <section class="card">
+        <div class="card-header">
+          <h2>Recent Events</h2>
+          <select id="class-filter" class="select-sm">
+            <option value="">All classes</option>
+          </select>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Time</th><th>Class</th><th>Conf</th><th>Source</th></tr></thead>
+            <tbody id="dash-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <!-- Crops gallery -->
+    <section class="card mt">
+      <div class="card-header"><h2>Cropped Detections Gallery</h2></div>
+      <div class="gallery" id="gallery"></div>
+    </section>
+
+  </main>
+
+  <script src="/static/js/dashboard.js"></script>
+</body>
+</html>
