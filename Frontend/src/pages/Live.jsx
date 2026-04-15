@@ -5,7 +5,7 @@ const cameras = [
   { id: 1, name: "Cam 1" },
   { id: 2, name: "Cam 2" },
   { id: 3, name: "Cam 3" },
-  { id: 4, name: "Heatmap" }
+  { id: 4, name: "Cam 4" }
 ];
 
 export default function Live() {
