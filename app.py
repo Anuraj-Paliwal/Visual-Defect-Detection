@@ -6,58 +6,43 @@ import time
 import threading
 import numpy as np
 from datetime import datetime
-from flask import Flask, render_template, Response, jsonify, request, send_from_directory
-from flask_sqlalchemy import SQLAlchemy
+from flask import Flask, Response, jsonify, request, send_from_directory, render_template
 from ultralytics import YOLO
 
+camera_running = False
 app = Flask(__name__)
+FRAME_SKIP = 3
+frame_count = {}
 
-# ── Config ───────────────────────────────────────────────────────────────────
+# ── Capture Control ─────────────────────────────────────────────
+MAX_CAPTURES_PER_OBJECT = 3
+COOLDOWN_SECONDS = 5
+
+object_tracker = {
+    "count": 0,
+    "last_capture_time": 0
+}
+
+# ── Paths ───────────────────────────────────────────────────────
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
 CROP_DIR   = os.path.join(BASE_DIR, "crops")
-# ROOT FIX: Using 'Small' model instead of 'Nano' for better feature extraction
-MODEL_PATH = os.path.join(BASE_DIR, "models", "yolov8s.pt") 
+JSON_PATH  = os.path.join(BASE_DIR, "detections.json")
+MODEL_PATH = os.path.join(BASE_DIR, "models", "yolov8s.pt")
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
-os.makedirs(CROP_DIR,   exist_ok=True)
+os.makedirs(CROP_DIR, exist_ok=True)
 
-app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{os.path.join(BASE_DIR, 'detections.db')}"
-app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-app.config["SECRET_KEY"] = "change-me-in-production"
+if not os.path.exists(JSON_PATH):
+    with open(JSON_PATH, "w") as f:
+        json.dump([], f)
 
-db = SQLAlchemy(app)
+active_cameras = [{"index": 0, "name": "CAM 1"}]
+camera_registry_lock = threading.Lock()
 
-# ── Model ─────────────────────────────────────────────────────────────────────
-class Detection(db.Model):
-    id          = db.Column(db.Integer, primary_key=True)
-    timestamp   = db.Column(db.DateTime, default=datetime.utcnow)
-    source      = db.Column(db.String(64))
-    class_name  = db.Column(db.String(64))
-    confidence  = db.Column(db.Float)
-    bbox_x1     = db.Column(db.Integer)
-    bbox_y1     = db.Column(db.Integer)
-    bbox_x2     = db.Column(db.Integer)
-    bbox_y2     = db.Column(db.Integer)
-    crop_path   = db.Column(db.String(256))
-    frame_path  = db.Column(db.String(256))
+_cameras = {} 
+_cam_lock = threading.Lock()
 
-    def to_dict(self):
-        return {
-            "id":          self.id,
-            "timestamp":   self.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
-            "source":      self.source,
-            "class_name":  self.class_name,
-            "confidence":  round(self.confidence, 3),
-            "bbox":        [self.bbox_x1, self.bbox_y1, self.bbox_x2, self.bbox_y2],
-            "crop_url":    f"/crops/{os.path.basename(self.crop_path)}" if self.crop_path else None,
-            "frame_url":   f"/uploads/{os.path.basename(self.frame_path)}" if self.frame_path else None,
-        }
-
-with app.app_context():
-    db.create_all()
-
-# ── YOLO loader ───────────────────────────────────────────────────────────────
 _model = None
 _model_lock = threading.Lock()
 
@@ -69,137 +54,326 @@ def get_model():
                 _model = YOLO(MODEL_PATH)
     return _model
 
-# ── Config ────────────────────────────────────────────────────────────────────
-# ROOT FIX: Lowered slightly to capture side-on bottles which have lower confidence
-CONF_THRESHOLD  = 0.30 
-PAD             = 15
-TARGET_CLASS    = "bottle"
+CONF_THRESHOLD = 0.30
+PAD = 15
+TARGET_CLASS = "bottle"
+json_lock = threading.Lock()
 
-# ── Enhanced bbox refinement ────────────────────────────────────────────────
-def refine_bbox_with_edges(frame_bgr, x1, y1, x2, y2, img_h, img_w):
-    # ROOT FIX: Dynamic Search Padding based on Aspect Ratio
-    box_w, box_h = x2 - x1, y2 - y1
-    # If width > height, expand X more (for sideways bottles)
-    mult_x = 0.6 if box_w > box_h else 0.4
-    mult_y = 0.6 if box_h > box_w else 0.4
-    
-    sx1 = max(x1 - int(box_w * mult_x), 0)
-    sy1 = max(y1 - int(box_h * mult_y), 0)
-    sx2 = min(x2 + int(box_w * mult_x), img_w)
-    sy2 = min(y2 + int(box_h * mult_y), img_h)
+def save_detection_json(data):
+    with json_lock:
+        with open(JSON_PATH, "r") as f:
+            detections = json.load(f)
+        detections.insert(0, data)
+        detections = detections[:100]
+        with open(JSON_PATH, "w") as f:
+            json.dump(detections, f, indent=2)
 
-    search_region = frame_bgr[sy1:sy2, sx1:sx2]
-    if search_region.size == 0: return x1, y1, x2, y2
+def run_inference(frame_bgr, source="webcam", cam_id=0):
+    # ── Guard: skip inference entirely if camera is off ──────────
+    if not camera_running:
+        return frame_bgr.copy(), []
 
-    # ROOT FIX: Black-Hat Filter to highlight dark objects on any background
-    gray = cv2.cvtColor(search_region, cv2.COLOR_BGR2GRAY)
-    bh_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
-    blackhat = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, bh_kernel)
-    enhanced = cv2.add(gray, blackhat) # Boosts dark bottle features
-    
-    blurred = cv2.GaussianBlur(enhanced, (5, 5), 0)
-    otsu_thresh, _ = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    
-    edges = cv2.Canny(blurred, threshold1=max(otsu_thresh * 0.3, 10), threshold2=otsu_thresh)
-    
-    # Use larger kernel to bridge structural gaps in the bottle body
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
-    edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
-
-    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        return max(x1-PAD,0), max(y1-PAD,0), min(x2+PAD,img_w), min(y2+PAD,img_h)
-
-    cx_min, cy_min, cx_max, cy_max = img_w, img_h, 0, 0
-    min_area = (box_w * box_h) * 0.1
-    
-    found_big = False
-    for c in contours:
-        if cv2.contourArea(c) > min_area:
-            bx, by, bw, bh = cv2.boundingRect(c)
-            cx_min, cy_min = min(cx_min, sx1+bx), min(cy_min, sy1+by)
-            cx_max, cy_max = max(cx_max, sx1+bx+bw), max(cy_max, sy1+by+bh)
-            found_big = True
-
-    if not found_big: return x1, y1, x2, y2
-
-    return max(min(x1, cx_min)-PAD, 0), max(min(y1, cy_min)-PAD, 0), \
-           min(max(x2, cx_max)+PAD, img_w), min(max(y2, cy_max)+PAD, img_h)
-
-# ── Inference ─────────────────────────────────────────────────────────────────
-def run_inference(frame_bgr, source="webcam"):
     model = get_model()
-    # ROOT FIX: augment=True enables TTA (Test-Time Augmentation) 
-    # This flips and scales the image internally to catch odd angles/rotations
-    results = model(frame_bgr, conf=CONF_THRESHOLD, augment=True, verbose=False)[0]
+    results = model(frame_bgr, conf=CONF_THRESHOLD, verbose=False)[0]
 
-    h, w = frame_bgr.shape[:2]
     annotated = frame_bgr.copy()
     detections = []
 
     bottle_boxes = [b for b in results.boxes if model.names[int(b.cls[0])] == TARGET_CLASS]
 
-    frame_path = None
-    if bottle_boxes:
-        frame_fname = f"{uuid.uuid4().hex}.jpg"
-        frame_path = os.path.join(UPLOAD_DIR, frame_fname)
-        cv2.imwrite(frame_path, annotated)
+    # Nothing detected → return early, no files written
+    if not bottle_boxes:
+        return annotated, detections
+
+    current_time = time.time()
+
+    # Reset counter after cooldown expires
+    if current_time - object_tracker["last_capture_time"] > COOLDOWN_SECONDS:
+        object_tracker["count"] = 0
+
+    # Cooldown cap reached → skip saving, no files written
+    if object_tracker["count"] >= MAX_CAPTURES_PER_OBJECT:
+        # Still draw boxes on the live feed for visibility
+        for box in bottle_boxes:
+            x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 165, 255), 2)  # orange = suppressed
+        return annotated, detections
+
+    # ── Save the full frame once per detection event ─────────────
+    frame_fname = f"{uuid.uuid4().hex}.jpg"
+    frame_path  = os.path.join(UPLOAD_DIR, frame_fname)
+    cv2.imwrite(frame_path, annotated)
 
     for box in bottle_boxes:
+        if object_tracker["count"] >= MAX_CAPTURES_PER_OBJECT:
+            break
+
         x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
-        conf, label = float(box.conf[0]), TARGET_CLASS
+        conf = float(box.conf[0])
 
-        rx1, ry1, rx2, ry2 = refine_bbox_with_edges(frame_bgr, x1, y1, x2, y2, h, w)
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
-        cv2.rectangle(annotated, (rx1, ry1), (rx2, ry2), (0, 255, 0), 2)
-        cv2.putText(annotated, f"BOTTLE {conf:.2f}", (rx1, max(ry1-10, 15)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-
-        crop = frame_bgr[ry1:ry2, rx1:rx2]
+        crop = frame_bgr[y1:y2, x1:x2]
         crop_fname = f"{uuid.uuid4().hex}_crop.jpg"
-        crop_path = os.path.join(CROP_DIR, crop_fname)
+        crop_path  = os.path.join(CROP_DIR, crop_fname)
         cv2.imwrite(crop_path, crop)
 
-        with app.app_context():
-            det = Detection(source=source, class_name=label, confidence=conf,
-                            bbox_x1=rx1, bbox_y1=ry1, bbox_x2=rx2, bbox_y2=ry2,
-                            crop_path=crop_path, frame_path=frame_path)
-            db.session.add(det)
-            db.session.commit()
-            detections.append(det.to_dict())
+        object_tracker["count"] += 1
+        object_tracker["last_capture_time"] = current_time
+
+        det = {
+            "id":         str(uuid.uuid4()),
+            "timestamp":  datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+            "camera_id":  cam_id,
+            "class_name": TARGET_CLASS,
+            "confidence": round(conf, 3),
+            "bbox":       [x1, y1, x2, y2],
+            "crop_url":   f"/crops/{crop_fname}",
+            "frame_url":  f"/uploads/{frame_fname}",
+            "status":     "pending"
+        }
+
+        save_detection_json(det)
+        detections.append(det)
 
     return annotated, detections
 
-# ── Camera & Routes (Standard Flask Logic) ───────────────────────────────────
-_camera = None
-def get_camera():
-    global _camera
-    if _camera is None or not _camera.isOpened():
-        _camera = cv2.VideoCapture(0)
-    return _camera
+def get_camera(device_index):
+    """Return (or open) a cv2.VideoCapture for the given device index."""
+    with _cam_lock:
+        cap = _cameras.get(device_index)
+        if cap is None or not cap.isOpened():
+            cap = cv2.VideoCapture(device_index)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            _cameras[device_index] = cap
+        return cap
 
-def generate_frames():
+def release_camera(device_index):
+    with _cam_lock:
+        cap = _cameras.pop(device_index, None)
+        if cap is not None:
+            cap.release()
+
+@app.route("/api/cameras/scan")
+def scan_cameras():
+    """
+    Probe device indices 0-9 and return any that open successfully.
+    Returns name, index, and resolution for each working camera.
+    """
+    found = []
+    for idx in range(10):
+        cap = cv2.VideoCapture(idx)
+        if cap.isOpened():
+            w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            cap.release()
+            found.append({
+                "index": idx,
+                "name": f"Camera {idx}",
+                "resolution": f"{w}x{h}"
+            })
+    return jsonify({"cameras": found})
+
+@app.route("/api/cameras/active")
+def get_active_cameras():
+    """Return the list of cameras the user has added."""
+    with camera_registry_lock:
+        return jsonify({"cameras": list(active_cameras)})
+
+@app.route("/api/cameras/add", methods=["POST"])
+def add_camera():
+    """Add a camera device to the active list."""
+    data = request.json
+    idx  = int(data.get("index", 0))
+    name = data.get("name", f"Camera {idx}")
+
+    with camera_registry_lock:
+        # avoid duplicates
+        if not any(c["index"] == idx for c in active_cameras):
+            active_cameras.append({"index": idx, "name": name})
+
+    return jsonify({"status": "added", "index": idx, "name": name})
+
+@app.route("/api/cameras/remove", methods=["POST"])
+def remove_camera():
+    """Remove a camera device from the active list and release its capture."""
+    data = request.json
+    idx  = int(data.get("index", -1))
+
+    with camera_registry_lock:
+        for cam in list(active_cameras):
+            if cam["index"] == idx:
+                active_cameras.remove(cam)
+
+    release_camera(idx)
+    return jsonify({"status": "removed", "index": idx})
+
+@app.route("/api/camera/start", methods=["POST"])
+def start_camera():
+    global camera_running
+    camera_running = True
+    return jsonify({"status": "started"})
+
+@app.route("/api/camera/stop", methods=["POST"])
+def stop_camera():
+    global camera_running
+    camera_running = False
+    # Release all open captures
+    with _cam_lock:
+        for cap in _cameras.values():
+            cap.release()
+        _cameras.clear()
+    return jsonify({"status": "stopped"})
+
+def generate_frames(device_index=0):
+    global frame_count
     while True:
-        cam = get_camera()
+        if not camera_running:
+            time.sleep(0.1)
+            continue
+
+        cam = get_camera(device_index)
         ok, frame = cam.read()
-        if not ok: break
-        annotated, _ = run_inference(frame)
+        if not ok:
+            time.sleep(0.1)
+            continue
+
+        key = device_index
+        frame_count[key] = frame_count.get(key, 0) + 1
+
+        if frame_count[key] % FRAME_SKIP != 0:
+            _, buf = cv2.imencode(".jpg", frame)
+            yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buf.tobytes() + b"\r\n")
+            continue
+
+        annotated, _ = run_inference(frame, cam_id=device_index)
         _, buf = cv2.imencode(".jpg", annotated)
         yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buf.tobytes() + b"\r\n")
 
-@app.route("/")
-def index(): return render_template("index.html")
-
 @app.route("/video_feed")
-def video_feed(): return Response(generate_frames(), mimetype="multipart/x-mixed-replace; boundary=frame")
+def video_feed():
+    device_index = int(request.args.get("cam", 0))
+    return Response(
+        generate_frames(device_index),
+        mimetype="multipart/x-mixed-replace; boundary=frame"
+    )
+
+@app.route("/")
+def live():
+    return render_template("live.html")
+
+@app.route("/dashboard")
+def dashboard():
+    return render_template("dashboard.html")
+
+@app.route("/api/set_cooldown", methods=["POST"])
+def set_cooldown():
+    global COOLDOWN_SECONDS
+    data = request.json
+    COOLDOWN_SECONDS = float(data.get("cooldown", 5))
+    return jsonify({"status": "ok", "cooldown": COOLDOWN_SECONDS})
 
 @app.route("/api/detections")
 def api_detections():
-    q = Detection.query.order_by(Detection.timestamp.desc()).limit(50)
-    return jsonify([r.to_dict() for r in q.all()])
+    with open(JSON_PATH, "r") as f:
+        return jsonify(json.load(f))
 
 @app.route("/crops/<path:fname>")
-def serve_crop(fname): return send_from_directory(CROP_DIR, fname)
+def serve_crop(fname):
+    return send_from_directory(CROP_DIR, fname)
+
+@app.route("/uploads/<path:fname>")
+def serve_upload(fname):
+    return send_from_directory(UPLOAD_DIR, fname)
+
+def _delete_detection_files(detection_list):
+    """Delete frame and crop files for a list of detection dicts."""
+    deleted_frames = set()
+    for d in detection_list:
+        # ── Delete full frame (once per unique frame_url) ─────────
+        frame_url = d.get("frame_url")
+        if frame_url and frame_url not in deleted_frames:
+            # frame_url is like  /uploads/abc123.jpg
+            # strip the leading slash and join with BASE_DIR
+            rel = frame_url.lstrip("/").replace("/", os.sep)
+            frame_path = os.path.join(BASE_DIR, rel)
+            try:
+                if os.path.exists(frame_path):
+                    os.remove(frame_path)
+                    print(f"Deleted frame: {frame_path}")
+                else:
+                    print(f"Frame not found (already deleted?): {frame_path}")
+            except Exception as e:
+                print(f"Frame delete error: {e}")
+            deleted_frames.add(frame_url)
+
+        # ── Delete crop ───────────────────────────────────────────
+        crop_url = d.get("crop_url")
+        if crop_url:
+            rel = crop_url.lstrip("/").replace("/", os.sep)
+            crop_path = os.path.join(BASE_DIR, rel)
+            try:
+                if os.path.exists(crop_path):
+                    os.remove(crop_path)
+                    print(f"Deleted crop: {crop_path}")
+                else:
+                    print(f"Crop not found (already deleted?): {crop_path}")
+            except Exception as e:
+                print(f"Crop delete error: {e}")
+
+@app.route("/api/decision", methods=["POST"])
+def handle_decision():
+    data     = request.json
+    det_id   = data.get("id")
+    decision = data.get("decision")
+
+    if not det_id or decision not in ["accept", "reject"]:
+        return jsonify({"error": "Invalid request"}), 400
+
+    with json_lock:
+        with open(JSON_PATH, "r") as f:
+            detections = json.load(f)
+
+        target = next((d for d in detections if d["id"] == det_id), None)
+        if not target:
+            return jsonify({"error": "Not found"}), 404
+
+        frame_url = target.get("frame_url")
+
+        if decision == "reject":
+            # remove all detections that share the same source frame
+            removed = [d for d in detections if d.get("frame_url") == frame_url]
+            updated = [d for d in detections if d.get("frame_url") != frame_url]
+        else:
+            for d in detections:
+                if d["id"] == det_id:
+                    d["status"] = "accepted"
+            updated = detections
+            removed = []
+
+        with open(JSON_PATH, "w") as f:
+            json.dump(updated, f, indent=2)
+
+    if decision == "reject":
+        _delete_detection_files(removed)
+
+    return jsonify({"status": "success"})
+
+@app.route("/api/decision/reject_all", methods=["POST"])
+def reject_all():
+    """Reject and delete every detection still in 'pending' status."""
+    with json_lock:
+        with open(JSON_PATH, "r") as f:
+            detections = json.load(f)
+
+        pending = [d for d in detections if d.get("status") == "pending"]
+        updated = [d for d in detections if d.get("status") != "pending"]
+
+        with open(JSON_PATH, "w") as f:
+            json.dump(updated, f, indent=2)
+
+    _delete_detection_files(pending)
+    return jsonify({"status": "success", "removed": len(pending)})
 
 if __name__ == "__main__":
     get_model()
