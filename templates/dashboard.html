@@ -1,323 +1,62 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>SENTINEL // Dashboard</title>
-  <link rel="stylesheet" href="/static/css/style.css" />
+  <title>DefectVision — Dashboard</title>
+  <link rel="stylesheet" href="/static/css/style.css"/>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
 <body>
-
-  <!-- NAVBAR -->
   <nav class="nav">
-    <div class="brand">
-      <span class="brand-dot"></span>
-      SENTINEL&nbsp;AI
-    </div>
+    <span class="nav-brand">⬡ DefectVision</span>
     <div class="nav-links">
-      <a href="/">LIVE</a>
-      <a href="/dashboard" class="active">DASHBOARD</a>
+      <a href="/">Live Feed</a>
+      <a href="/dashboard" class="active">Dashboard</a>
     </div>
   </nav>
 
-  <!-- PAGE -->
-  <div class="page">
+  <main class="container">
 
-    <!-- STATS -->
-    <div class="stats" id="statsRow">
-      <div class="stat">
-        <div class="stat-label">Total Detections</div>
-        <div class="stat-value" id="statTotal">0</div>
-      </div>
-      <div class="stat">
-        <div class="stat-label">Active Cameras</div>
-        <div class="stat-value">1</div>
-      </div>
-      <div class="stat">
-        <div class="stat-label">Alerts Today</div>
-        <div class="stat-value" id="statAlerts">0</div>
-      </div>
-      <div class="stat">
-        <div class="stat-label">Pending Review</div>
-        <div class="stat-value" id="statPending">0</div>
-      </div>
+    <!-- Stat cards -->
+    <div class="stats-row" id="stats-row">
+      <div class="stat-card"><div class="stat-label">Total Detections</div><div class="stat-val" id="s-total">—</div></div>
+      <div class="stat-card"><div class="stat-label">Unique Classes</div><div class="stat-val" id="s-classes">—</div></div>
+      <div class="stat-card"><div class="stat-label">Top Class</div><div class="stat-val" id="s-top">—</div></div>
     </div>
 
-    <!-- MAIN LAYOUT -->
-    <div class="dashboard-layout">
+    <div class="grid-2 mt">
+      <!-- Bar chart -->
+      <section class="card">
+        <div class="card-header"><h2>Detections by Class</h2></div>
+        <canvas id="bar-chart" height="220"></canvas>
+      </section>
 
-      <!-- LEFT: DETAIL PANEL -->
-      <div class="panel">
-        <div class="panel-header">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
-               stroke="var(--accent)" stroke-width="2">
-            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
-          </svg>
-          <span class="panel-title">Detection Detail</span>
-          <span id="detailStatus" style="margin-left:auto;"></span>
+      <!-- Recent detections table -->
+      <section class="card">
+        <div class="card-header">
+          <h2>Recent Events</h2>
+          <select id="class-filter" class="select-sm">
+            <option value="">All classes</option>
+          </select>
         </div>
-        <div class="panel-body" id="detailBody">
-
-          <!-- Empty state -->
-          <div class="detail-placeholder" id="detailEmpty">
-            <svg width="56" height="56" viewBox="0 0 24 24" fill="none"
-                 stroke="currentColor" stroke-width="1">
-              <rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/>
-              <line x1="12" y1="17" x2="12" y2="21"/>
-            </svg>
-            <p>SELECT A DETECTION TO INSPECT</p>
-          </div>
-
-          <!-- Filled state (hidden initially) -->
-          <div id="detailFilled" style="display:none;">
-
-            <!-- Meta table -->
-            <div class="detail-meta" id="metaTable"></div>
-
-            <!-- Images -->
-            <div class="detail-images" id="detailImages"></div>
-
-            <!-- Actions -->
-            <div class="actions">
-              <button class="btn-accept" onclick="handleDecision('accept')">
-                ✔ ACCEPT
-              </button>
-              <button class="btn-reject" onclick="handleDecision('reject')">
-                ✖ REJECT
-              </button>
-            </div>
-
-          </div>
-
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Time</th><th>Class</th><th>Conf</th><th>Source</th></tr></thead>
+            <tbody id="dash-body"></tbody>
+          </table>
         </div>
-      </div>
-
-      <!-- RIGHT: LIST PANEL -->
-      <div class="panel">
-        <div class="panel-header">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
-               stroke="var(--accent)" stroke-width="2">
-            <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/>
-            <line x1="8" y1="18" x2="21" y2="18"/>
-            <line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/>
-            <line x1="3" y1="18" x2="3.01" y2="18"/>
-          </svg>
-          <span class="panel-title">Recent Detections</span>
-          <div style="margin-left:auto;display:flex;align-items:center;gap:10px;">
-            <span id="listCount" style="
-              font-family:var(--mono);font-size:10px;
-              color:var(--muted);letter-spacing:1px;">0 ITEMS</span>
-            <button id="rejectAllBtn" onclick="rejectAll()" style="
-              padding:4px 12px;
-              font-family:var(--mono);font-size:10px;letter-spacing:1px;
-              text-transform:uppercase;cursor:pointer;
-              background:transparent;color:var(--red);
-              border:1px solid rgba(255,61,90,0.4);border-radius:3px;
-              transition:all 0.2s;display:none;"
-              onmouseover="this.style.background='var(--red)';this.style.color='white';"
-              onmouseout="this.style.background='transparent';this.style.color='var(--red)';">
-              ✖ REJECT ALL
-            </button>
-          </div>
-        </div>
-        <div class="panel-body" style="padding:12px;">
-          <ul class="detection-list" id="detectionList">
-            <li style="padding:40px 0;text-align:center;font-family:var(--mono);
-                       font-size:11px;letter-spacing:2px;color:var(--muted);">
-              AWAITING DETECTIONS…
-            </li>
-          </ul>
-        </div>
-      </div>
-
+      </section>
     </div>
-  </div>
 
-  <script>
-    let detections = [];
-    let selectedId = null;
+    <!-- Crops gallery -->
+    <section class="card mt">
+      <div class="card-header"><h2>Cropped Detections Gallery</h2></div>
+      <div class="gallery" id="gallery"></div>
+    </section>
 
-    // ── Fetch loop ──────────────────────────────────
-    function fetchDetections() {
-      fetch("/api/detections")
-        .then(r => r.json())
-        .then(data => {
-          detections = data;
-          renderList();
-          updateStats();
-          // refresh detail if selected still exists
-          if (selectedId) {
-            const match = detections.find(d => d.id === selectedId);
-            if (match) renderDetail(match);
-            else clearDetail();
-          }
-        })
-        .catch(console.error);
-    }
+  </main>
 
-    setInterval(fetchDetections, 2000);
-    fetchDetections();
-
-    // ── Stats ───────────────────────────────────────
-    function updateStats() {
-      document.getElementById("statTotal").textContent   = detections.length;
-      document.getElementById("statAlerts").textContent  = detections.length;
-      const pending = detections.filter(d => d.status === "pending").length;
-      document.getElementById("statPending").textContent = pending;
-      // show Reject All only when there are pending items
-      document.getElementById("rejectAllBtn").style.display = pending > 0 ? "inline-block" : "none";
-    }
-
-    // ── Reject All ──────────────────────────────────
-    function rejectAll() {
-      if (!confirm("Reject and delete ALL pending detections?")) return;
-      fetch("/api/decision/reject_all", { method: "POST" })
-        .then(r => r.json())
-        .then(() => {
-          detections = detections.filter(d => d.status !== "pending");
-          clearDetail();
-          renderList();
-          updateStats();
-        })
-        .catch(console.error);
-    }
-
-    // ── List ────────────────────────────────────────
-    function renderList() {
-      const ul = document.getElementById("detectionList");
-      document.getElementById("listCount").textContent = `${detections.length} ITEMS`;
-
-      if (detections.length === 0) {
-        ul.innerHTML = `<li style="padding:40px 0;text-align:center;font-family:var(--mono);
-          font-size:11px;letter-spacing:2px;color:var(--muted);">AWAITING DETECTIONS…</li>`;
-        return;
-      }
-
-      ul.innerHTML = detections.map(d => `
-        <li class="detection-item ${d.id === selectedId ? "active" : ""} ${d.status === "accepted" ? "accepted" : ""}"
-            onclick="selectDetection('${d.id}')">
-
-          ${d.crop_url
-            ? `<img class="di-thumb" src="${d.crop_url}" alt="thumb"
-                    onerror="this.style.display='none'" />`
-            : `<div class="di-thumb" style="display:flex;align-items:center;justify-content:center;">
-                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
-                      stroke="var(--muted)" stroke-width="1.5">
-                   <rect x="2" y="2" width="20" height="20" rx="2"/>
-                   <circle cx="12" cy="10" r="3"/><path d="M6 21v-1a6 6 0 0112 0v1"/>
-                 </svg>
-               </div>`
-          }
-
-          <div class="di-info">
-            <div class="di-class">${d.class_name.toUpperCase()}</div>
-            <div class="di-meta">CAM ${d.camera_id} &nbsp;·&nbsp; ${d.timestamp}</div>
-          </div>
-
-          <div>
-            <div class="di-conf">${(d.confidence * 100).toFixed(1)}%</div>
-            <div style="margin-top:4px;">
-              ${d.status === "accepted"
-                ? `<span class="tag tag-accepted">✔ OK</span>`
-                : `<span class="tag tag-pending">● PEND</span>`
-              }
-            </div>
-          </div>
-        </li>
-      `).join("");
-    }
-
-    // ── Select ──────────────────────────────────────
-    function selectDetection(id) {
-      selectedId = id;
-      const d = detections.find(x => x.id === id);
-      if (d) renderDetail(d);
-      renderList(); // re-render to update active state
-    }
-
-    function renderDetail(d) {
-      document.getElementById("detailEmpty").style.display  = "none";
-      document.getElementById("detailFilled").style.display = "block";
-
-      // status tag
-      document.getElementById("detailStatus").innerHTML =
-        d.status === "accepted"
-          ? `<span class="tag tag-accepted">✔ ACCEPTED</span>`
-          : `<span class="tag tag-pending">● PENDING</span>`;
-
-      // meta table
-      document.getElementById("metaTable").innerHTML = [
-        ["CLASS",      d.class_name.toUpperCase()],
-        ["CONFIDENCE", `${(d.confidence * 100).toFixed(1)}%`],
-        ["CAMERA",     `CAM ${d.camera_id}`],
-        ["TIMESTAMP",  d.timestamp],
-        ["STATUS",     d.status.toUpperCase()],
-      ].map(([k, v]) => `
-        <div class="meta-row">
-          <span class="meta-key">${k}</span>
-          <span class="meta-val">${v}</span>
-        </div>
-      `).join("");
-
-      // images
-      const imgs = [];
-
-      if (d.crop_url) imgs.push({ url: d.crop_url, label: "CROP" });
-
-      if (d.heatmap_url) {
-        imgs.push({ url: d.heatmap_url, label: "HEATMAP" });
-      } else {
-        imgs.push({ url: null, label: "HEATMAP" });
-      }
-
-      if (d.frame_url) imgs.push({ url: d.frame_url, label: "FRAME" });
-
-      document.getElementById("detailImages").innerHTML = imgs.map(img => `
-        <div class="img-box">
-          ${img.url
-            ? `<img src="${img.url}" alt="${img.label}"
-                    onerror="this.parentElement.innerHTML='<div class=img-placeholder>NO SIGNAL</div>'" />`
-            : `<div class="img-placeholder">NO SIGNAL</div>`
-          }
-          <span class="img-box-label">${img.label}</span>
-        </div>
-      `).join("");
-    }
-
-    function clearDetail() {
-      selectedId = null;
-      document.getElementById("detailEmpty").style.display  = "flex";
-      document.getElementById("detailFilled").style.display = "none";
-      document.getElementById("detailStatus").innerHTML = "";
-    }
-
-    // ── Decision ────────────────────────────────────
-    function handleDecision(decision) {
-      if (!selectedId) return;
-
-      fetch("/api/decision", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: selectedId, decision })
-      })
-      .then(r => r.json())
-      .then(() => {
-        if (decision === "reject") {
-          detections = detections.filter(d => d.id !== selectedId);
-          clearDetail();
-        } else {
-          detections = detections.map(d =>
-            d.id === selectedId ? { ...d, status: "accepted" } : d
-          );
-          const updated = detections.find(d => d.id === selectedId);
-          if (updated) renderDetail(updated);
-        }
-        renderList();
-        updateStats();
-      })
-      .catch(console.error);
-    }
-  </script>
-
+  <script src="/static/js/dashboard.js"></script>
 </body>
 </html>
