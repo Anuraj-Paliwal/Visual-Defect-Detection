@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>SENTINEL // Live Feed</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+  <style>
+    .picker-overlay {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.88);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 300; padding: 20px;
+      animation: fadeIn 0.2s ease;
+    }
+    .picker-box {
+      width: 100%; max-width: 540px;
+      background: var(--surface);
+      border: 1px solid var(--border-b);
+      border-radius: 10px;
+      overflow: hidden;
+      animation: scaleIn 0.2s ease;
+    }
+    .picker-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(0,255,170,0.03);
+    }
+    .picker-title {
+      font-family: var(--mono); font-size: 11px;
+      letter-spacing: 3px; color: var(--accent); text-transform: uppercase;
+    }
+    .picker-body { padding: 16px; }
+    .picker-scan-btn {
+      width: 100%; padding: 10px;
+      font-family: var(--mono); font-size: 11px; letter-spacing: 2px;
+      text-transform: uppercase; cursor: pointer;
+      background: rgba(0,255,170,0.06); color: var(--accent);
+      border: 1px dashed rgba(0,255,170,0.3); border-radius: 6px;
+      transition: all 0.2s; margin-bottom: 14px;
+    }
+    .picker-scan-btn:hover { background: rgba(0,255,170,0.12); }
+    .picker-scan-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .device-list { display: flex; flex-direction: column; gap: 8px; min-height: 60px; }
+    .device-row {
+      display: flex; align-items: center; gap: 12px;
+      padding: 12px 14px;
+      background: rgba(255,255,255,0.02);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      cursor: pointer; transition: all 0.2s;
+    }
+    .device-row:hover { border-color: var(--border-b); background: rgba(0,255,170,0.06); }
+    .device-row.already-added { opacity: 0.45; cursor: not-allowed; pointer-events: none; }
+    .device-icon {
+      width: 36px; height: 36px; border-radius: 4px;
+      background: rgba(0,255,170,0.08);
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .device-info { flex: 1; }
+    .device-name { font-family: var(--head); font-size: 13px; font-weight: 700; color: var(--text); }
+    .device-idx  { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-top: 2px; letter-spacing: 1px; }
+    .device-add-btn {
+      padding: 5px 14px;
+      font-family: var(--mono); font-size: 10px; letter-spacing: 1px;
+      text-transform: uppercase; border-radius: 3px;
+      border: 1px solid var(--accent); color: var(--accent);
+      background: transparent; cursor: pointer; transition: all 0.2s;
+    }
+    .device-add-btn:hover { background: var(--accent); color: var(--bg); }
+
+    .picker-empty {
+      text-align: center; padding: 30px 0;
+      font-family: var(--mono); font-size: 11px;
+      letter-spacing: 2px; color: var(--muted);
+    }
+
+    .cam-grid-dynamic {
+      display: grid;
+      gap: 14px;
+      grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    }
+
+    .cam-add-card {
+      background: var(--surface);
+      border: 1px dashed rgba(0,255,170,0.2);
+      border-radius: 8px;
+      min-height: 220px;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 10px; cursor: pointer; transition: all 0.25s;
+      color: var(--muted);
+    }
+    .cam-add-card:hover {
+      border-color: rgba(0,255,170,0.5);
+      background: rgba(0,255,170,0.04);
+      color: var(--accent);
+    }
+    .cam-add-card span { font-family: var(--mono); font-size: 11px; letter-spacing: 2px; text-transform: uppercase; }
+    .cam-add-plus {
+      width: 40px; height: 40px; border-radius: 50%;
+      border: 1px solid currentColor;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 22px; line-height: 1;
+    }
+
+    .cam-remove-btn {
+      position: absolute; top: 10px; left: 10px; z-index: 6;
+      width: 26px; height: 26px;
+      background: rgba(255,61,90,0.15); border: 1px solid rgba(255,61,90,0.4);
+      color: var(--red); border-radius: 4px;
+      font-size: 13px; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: all 0.2s; opacity: 0;
+    }
+    .cam-card:hover .cam-remove-btn { opacity: 1; }
+    .cam-remove-btn:hover { background: var(--red); color: white; }
+
+    /* Overlay: shows camera state (OFFLINE / WAITING / LIVE) only.
+       Detection results intentionally NOT shown here — see dashboard. */
+    .cam-overlay {
+      position: absolute; inset: 0;
+      background: rgba(0,0,0,0.45);
+      z-index: 3;
+      display: flex; align-items: center; justify-content: center;
+      font-family: var(--mono); font-size: 12px;
+      letter-spacing: 2px; color: white;
+      pointer-events: none;
+    }
+
+    .cam-toggle-btn {
+      position: absolute; bottom: 10px; right: 10px;
+      z-index: 5;
+      padding: 5px 14px;
+      font-family: var(--mono); font-size: 10px; letter-spacing: 1px;
+      text-transform: uppercase; border-radius: 3px;
+      border: 1px solid var(--accent); color: var(--accent);
+      background: rgba(0,0,0,0.6); cursor: pointer; transition: all 0.2s;
+    }
+    .cam-toggle-btn:hover { background: var(--accent); color: var(--bg); }
+    .cam-toggle-btn.running { border-color: var(--red); color: var(--red); }
+    .cam-toggle-btn.running:hover { background: var(--red); color: white; }
+
+    /* angle badge top-right of card */
+    .cam-angle-badge {
+      position: absolute; top: 10px; right: 10px; z-index: 5;
+      padding: 3px 8px;
+      font-family: var(--mono); font-size: 9px; letter-spacing: 2px;
+      text-transform: uppercase; border-radius: 3px;
+      background: rgba(0,0,0,0.6);
+      border: 1px solid rgba(0,255,170,0.3);
+      color: var(--accent);
+    }
+  </style>
+</head>
+<body>
+
+  <nav class="nav">
+    <div class="brand">
+      <span class="brand-dot"></span>
+      SENTINEL&nbsp;AI
+    </div>
+    <div class="nav-links">
+      <a href="/" class="active">LIVE</a>
+      <a href="/dashboard">DASHBOARD</a>
+    </div>
+  </nav>
+
+  <div class="page">
+
+    <div class="live-controls">
+      <div class="input-group">
+        <label>COOLDOWN</label>
+        <input type="number" id="cooldownInput" value="5" min="1" max="60" />
+        <span style="font-family:var(--mono);font-size:11px;color:var(--muted)">s</span>
+      </div>
+      <button class="btn-sm" onclick="setCooldown()">SET</button>
+
+      <span id="statusBadge" style="
+        font-family:var(--mono);font-size:10px;letter-spacing:2px;
+        padding:5px 12px;border-radius:3px;
+        background:rgba(74,85,104,0.2);color:var(--muted);
+        border:1px solid rgba(74,85,104,0.3);margin-left:auto;">
+        ● OFFLINE
+      </span>
+    </div>
+
+    <div class="cam-grid-dynamic" id="camGrid"></div>
+  </div>
+
+  <!-- LIVE FEED MODAL -->
+  <div class="modal-overlay" id="feedModal" style="display:none" onclick="closeFeedModal(event)">
+    <div class="modal-box" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <span class="modal-title" id="modalTitle">CAM // LIVE FEED</span>
+        <button class="modal-close" onclick="closeFeedModal()">✕</button>
+      </div>
+      <div class="modal-video">
+        <img id="modalFeed" src="" alt="Live feed" />
+      </div>
+    </div>
+  </div>
+
+  <!-- ADD CAMERA PICKER MODAL -->
+  <div class="picker-overlay" id="pickerModal" style="display:none">
+    <div class="picker-box">
+      <div class="picker-header">
+        <span class="picker-title">Add Camera</span>
+        <button class="modal-close" onclick="closePicker()">✕</button>
+      </div>
+      <div class="picker-body">
+        <button class="picker-scan-btn" id="scanBtn" onclick="scanDevices()">
+          ⟳ &nbsp;SCAN FOR CAMERAS
+        </button>
+        <div class="device-list" id="deviceList">
+          <div class="picker-empty">Click scan to detect connected cameras</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // camStates: { [camId]: { running: bool, loading: bool } }
+    let camStates  = {};
+    let activeCams = [];   // [{ id, index, name, type }]
+    let nextSlot   = 1;
+
+    // ── Grid builder ──────────────────────────────────────────────
+    function buildGrid() {
+      const grid = document.getElementById("camGrid");
+      grid.innerHTML = "";
+
+      activeCams.forEach(cam => {
+        const isRunning = camStates[cam.id]?.running || false;
+        const angleLabel = (cam.type || "").toUpperCase() || "CAM";
+
+        const card = document.createElement("div");
+        card.className = "cam-card";
+        card.id        = `cam-card-${cam.id}`;
+        card.style.cssText = "position:relative;min-height:220px;";
+
+        card.innerHTML = `
+          <div class="corner-tl"></div>
+          <div class="corner-tr"></div>
+
+          <button class="cam-remove-btn" title="Remove camera"
+            onclick="event.stopPropagation();removeCamera(${cam.id})">✕</button>
+
+          <!-- angle badge (TOP / SIDE) -->
+          <span class="cam-angle-badge">${angleLabel}</span>
+
+          <!-- placeholder shown when cam is off -->
+          <div class="cam-bg" id="bg-${cam.id}" style="${isRunning ? "display:none" : ""}">
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="1">
+              <path d="M23 7l-7 5 7 5V7z"/>
+              <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+            </svg>
+            <span id="status-${cam.id}">OFFLINE</span>
+          </div>
+
+          <!-- overlay: camera state only, NO detection results here -->
+          <div class="cam-overlay" id="overlay-${cam.id}">
+            <span id="overlay-text-${cam.id}">${isRunning ? "WAITING..." : "OFFLINE"}</span>
+          </div>
+
+          <!-- REC badge -->
+          <span class="cam-live-badge" id="rec-${cam.id}"
+                style="${isRunning ? "" : "display:none"}">● REC</span>
+
+          <button class="cam-toggle-btn ${isRunning ? "running" : ""}"
+                  id="toggle-btn-${cam.id}"
+                  onclick="event.stopPropagation();toggleCam(${cam.id})">
+            ${isRunning ? "STOP" : "START"}
+          </button>
+
+          <div class="cam-label" id="label-${cam.id}">
+            <span class="cam-status-dot ${isRunning ? "live" : ""}"></span>
+            ${cam.name}
+          </div>
+        `;
+
+        card.addEventListener("click", () => {
+          if (camStates[cam.id]?.running) openFeedModal(cam);
+        });
+
+        grid.appendChild(card);
+
+        if (isRunning) attachStream(cam);
+      });
+
+      // "+" add-camera card
+      const addCard = document.createElement("div");
+      addCard.className = "cam-add-card";
+      addCard.onclick = openPicker;
+      addCard.innerHTML = `<div class="cam-add-plus">+</div><span>Add Camera</span>`;
+      grid.appendChild(addCard);
+
+      updateGlobalBadge();
+    }
+
+    // ── Toggle per camera ─────────────────────────────────────────
+    function toggleCam(id) {
+      const cam = activeCams.find(c => c.id === id);
+      if (!cam) return;
+      if (!camStates[id]?.running) startCam(cam);
+      else stopCam(cam);
+    }
+
+    function startCam(cam) {
+      camStates[cam.id] = { running: false, loading: true };
+      setCamButtonState(cam.id, "CHECKING...", false);
+      setOverlay(cam.id, "CHECKING...", "rgba(0,0,0,0.45)");
+
+      fetch("/api/camera/start_one", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ index: cam.index })
+      })
+      .then(r => r.json())
+      .then(res => {
+        if (res.status === "ok") {
+          camStates[cam.id] = { running: true, loading: false };
+          attachStream(cam);
+          setCamButtonState(cam.id, "STOP", true);
+          // overlay is hidden by attachStream once first frame loads
+          showRec(cam.id, true);
+          updateGlobalBadge();
+        } else {
+          camStates[cam.id] = { running: false, loading: false };
+          setCamButtonState(cam.id, "START", false);
+          setOverlay(cam.id, "ERROR", "rgba(255,61,90,0.2)");
+        }
+      })
+      .catch(() => {
+        camStates[cam.id] = { running: false, loading: false };
+        setCamButtonState(cam.id, "START", false);
+        setOverlay(cam.id, "FAILED", "rgba(255,61,90,0.2)");
+      });
+    }
+
+    function stopCam(cam) {
+      fetch("/api/camera/stop_one", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ index: cam.index })
+      });
+
+      camStates[cam.id] = { running: false, loading: false };
+      removeStream(cam);
+      setCamButtonState(cam.id, "START", false);
+      setOverlay(cam.id, "OFFLINE", "rgba(0,0,0,0.45)");
+      showRec(cam.id, false);
+      updateGlobalBadge();
+    }
+
+    // ── Stream helpers ────────────────────────────────────────────
+    function attachStream(cam) {
+      const card = document.getElementById(`cam-card-${cam.id}`);
+      if (!card) return;
+
+      const bg = document.getElementById(`bg-${cam.id}`);
+      if (bg) bg.style.display = "none";
+
+      let img = card.querySelector("img.cam-stream");
+      if (!img) {
+        img = document.createElement("img");
+        img.className = "cam-stream";
+        img.style.cssText = "position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:1;";
+        img.alt = cam.name;
+        const overlay = document.getElementById(`overlay-${cam.id}`);
+        card.insertBefore(img, overlay);
+      }
+
+      img.src = `/video_feed?cam=${cam.index}&t=${Date.now()}`;
+
+      // Once the first frame arrives, hide the overlay completely
+      img.onload = () => {
+        const overlay = document.getElementById(`overlay-${cam.id}`);
+        if (overlay) overlay.style.display = "none";
+      };
+      img.onerror = () => {
+        setOverlay(cam.id, "NO SIGNAL", "rgba(0,0,0,0.45)");
+      };
+    }
+
+    function removeStream(cam) {
+      const card = document.getElementById(`cam-card-${cam.id}`);
+      if (!card) return;
+
+      const img = card.querySelector("img.cam-stream");
+      if (img) img.remove();
+
+      const bg = document.getElementById(`bg-${cam.id}`);
+      if (bg) bg.style.display = "";
+
+      setOverlay(cam.id, "OFFLINE", "rgba(0,0,0,0.45)");
+    }
+
+    // ── UI helpers ────────────────────────────────────────────────
+    function setOverlay(id, text, bg) {
+      const overlay = document.getElementById(`overlay-${id}`);
+      if (!overlay) return;
+      overlay.style.display    = "flex";
+      overlay.style.background = bg;
+      const t = document.getElementById(`overlay-text-${id}`);
+      if (t) t.textContent = text;
+    }
+
+    function setCamButtonState(id, label, isRunning) {
+      const btn = document.getElementById(`toggle-btn-${id}`);
+      if (!btn) return;
+      btn.textContent = label;
+      btn.classList.toggle("running", isRunning);
+    }
+
+    function updateCamStatus(id, text) {
+      const el = document.getElementById(`status-${id}`);
+      if (el) el.textContent = text;
+    }
+
+    function showRec(id, show) {
+      const rec = document.getElementById(`rec-${id}`);
+      if (rec) rec.style.display = show ? "" : "none";
+    }
+
+    function updateGlobalBadge() {
+      const badge   = document.getElementById("statusBadge");
+      const anyLive = Object.values(camStates).some(s => s.running);
+      if (anyLive) {
+        badge.style.background  = "rgba(0,255,170,0.1)";
+        badge.style.color       = "var(--accent)";
+        badge.style.borderColor = "rgba(0,255,170,0.3)";
+        badge.textContent       = "● LIVE";
+      } else {
+        badge.style.background  = "rgba(74,85,104,0.2)";
+        badge.style.color       = "var(--muted)";
+        badge.style.borderColor = "rgba(74,85,104,0.3)";
+        badge.textContent       = "● OFFLINE";
+      }
+    }
+
+    // ── Cooldown ──────────────────────────────────────────────────
+    function setCooldown() {
+      const sec = parseFloat(document.getElementById("cooldownInput").value) || 5;
+      fetch("/api/set_cooldown", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cooldown: sec })
+      });
+    }
+
+    // ── Feed modal ────────────────────────────────────────────────
+    function openFeedModal(cam) {
+      document.getElementById("modalTitle").textContent = `${cam.name} // LIVE FEED`;
+      document.getElementById("modalFeed").src = `/video_feed?cam=${cam.index}&t=${Date.now()}`;
+      document.getElementById("feedModal").style.display = "flex";
+    }
+    function closeFeedModal(event) {
+      if (event && event.target !== document.getElementById("feedModal")) return;
+      document.getElementById("feedModal").style.display = "none";
+      document.getElementById("modalFeed").src = "";
+    }
+
+    // ── Picker modal ──────────────────────────────────────────────
+    function openPicker() {
+      document.getElementById("pickerModal").style.display = "flex";
+      document.getElementById("deviceList").innerHTML =
+        '<div class="picker-empty">Click scan to detect connected cameras</div>';
+    }
+    function closePicker() {
+      document.getElementById("pickerModal").style.display = "none";
+    }
+
+    function scanDevices() {
+      const btn = document.getElementById("scanBtn");
+      btn.disabled = true; btn.textContent = "⟳  SCANNING…";
+
+      fetch("/api/cameras/scan")
+        .then(r => r.json())
+        .then(data => renderDeviceList(data.cameras || []))
+        .catch(() => {
+          document.getElementById("deviceList").innerHTML =
+            '<div class="picker-empty">Scan failed — check server logs</div>';
+        })
+        .finally(() => { btn.disabled = false; btn.textContent = "⟳  SCAN FOR CAMERAS"; });
+    }
+
+    function renderDeviceList(devices) {
+      const list = document.getElementById("deviceList");
+      if (devices.length === 0) {
+        list.innerHTML = '<div class="picker-empty">No cameras detected</div>';
+        return;
+      }
+      const addedIndexes = new Set(activeCams.map(c => c.index));
+      list.innerHTML = devices.map(dev => {
+        const added = addedIndexes.has(dev.index);
+        return `
+          <div class="device-row ${added ? "already-added" : ""}"
+               onclick="${added ? "" : `addCamera(${dev.index}, '${dev.name}')`}">
+            <div class="device-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                   stroke="var(--accent)" stroke-width="1.5">
+                <path d="M23 7l-7 5 7 5V7z"/>
+                <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+              </svg>
+            </div>
+            <div class="device-info">
+              <div class="device-name">${dev.name}</div>
+              <div class="device-idx">DEVICE INDEX ${dev.index} &nbsp;·&nbsp; ${dev.resolution}</div>
+            </div>
+            ${added
+              ? `<span style="font-family:var(--mono);font-size:10px;color:var(--muted);letter-spacing:1px;">ADDED</span>`
+              : `<button class="device-add-btn"
+                   onclick="event.stopPropagation();addCamera(${dev.index},'${dev.name}')">+ ADD</button>`
+            }
+          </div>`;
+      }).join("");
+    }
+
+    // ── Camera management ─────────────────────────────────────────
+    function addCamera(deviceIndex, deviceName) {
+      const id   = nextSlot++;
+      const name = deviceName || `CAM ${id}`;
+      const type = name.toUpperCase().includes("TOP") ? "top" : "side";
+
+      activeCams.push({ id, index: deviceIndex, name, type });
+      fetch("/api/cameras/add", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ index: deviceIndex, name })
+      });
+      closePicker();
+      buildGrid();
+    }
+
+    function removeCamera(id) {
+      const cam = activeCams.find(c => c.id === id);
+      if (cam) {
+        if (camStates[id]?.running) stopCam(cam);
+        fetch("/api/cameras/remove", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ index: cam.index })
+        });
+      }
+      delete camStates[id];
+      activeCams = activeCams.filter(c => c.id !== id);
+      buildGrid();
+    }
+
+    // ── Init: load cameras + sync running state from backend ──────
+    fetch("/api/cameras/active")
+      .then(r => r.json())
+      .then(data => {
+        const cams = data.cameras || [];
+        const checks = cams.map(c => {
+          const id = nextSlot++;
+          activeCams.push({ id, index: c.index, name: c.name, type: c.type || "top" });
+          return fetch(`/api/camera/status?cam=${c.index}`)
+            .then(r => r.json())
+            .then(s  => { camStates[id] = { running: s.running, loading: false }; })
+            .catch(() => { camStates[id] = { running: false,    loading: false }; });
+        });
+        return Promise.all(checks);
+      })
+      .then(() => buildGrid())
+      .catch(() => buildGrid());
+
+    // ── Live label polling (cam label only, no detection details) ─
+    // The live page just shows whether the camera is active.
+    // Full detection results are on the dashboard.
+    setInterval(() => {
+      activeCams.forEach(cam => {
+        const isRunning = camStates[cam.id]?.running;
+        const labelEl   = document.getElementById(`label-${cam.id}`);
+        if (!labelEl) return;
+
+        if (isRunning) {
+          labelEl.innerHTML = `
+            <span class="cam-status-dot live"></span>
+            ${cam.name} &nbsp;·&nbsp; <span style="color:var(--accent)">LIVE</span>
+          `;
+        } else {
+          labelEl.innerHTML = `
+            <span class="cam-status-dot"></span>
+            ${cam.name}
+          `;
+        }
+      });
+    }, 1000);
+  </script>
+</body>
+</html>
