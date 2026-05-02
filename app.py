@@ -51,12 +51,12 @@ if not os.path.exists(JSON_PATH):
 #    two physical cameras. Change the "index" values then.          ─
 active_cameras = [
     {
-        "index": "http://192.168.1.9:8080/video",
+        "index": "http://192.168.1.12:8080/video",
         "name": "TOP CAM (Phone 1)",
         "type": "top"
     },
     {
-        "index": "http://192.168.1.10:8080/video",
+        "index": "http://192.168.1.12:8080/video",
         "name": "SIDE CAM (Phone 2)",
         "type": "side"
     },
@@ -361,7 +361,13 @@ def get_camera(device_index):
 
         if cap is None or not cap.isOpened():
 
-            cap = cv2.VideoCapture(device_index)
+            # Better backend for Windows/IP camera streams
+            if isinstance(device_index, str) and device_index.startswith("http"):
+                cap = cv2.VideoCapture(device_index, cv2.CAP_FFMPEG)
+            else:
+                cap = cv2.VideoCapture(device_index, cv2.CAP_DSHOW)
+
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
             if not cap.isOpened():
                 print(f"[ERROR] Cannot open camera {device_index}")
@@ -461,32 +467,71 @@ def camera_status():
 
 def generate_frames(device_index=0):
     global frame_count
+    fail_count = 0
+
     while True:
         if not camera_states.get(device_index, False):
             time.sleep(0.1)
             continue
 
         cam = get_camera(device_index)
-        ok, frame = cam.read()
 
-        if not ok or frame is None:
-            print(f"[WARN] Camera lost: {device_index}, reconnecting...")
-            release_camera(device_index)
+        if cam is None:
             time.sleep(1)
             continue
 
-        frame_count[device_index] = frame_count.get(device_index, 0) + 1
+        try:
+            ok, frame = cam.read()
+        except cv2.error as e:
+            fail_count += 1
+            print(f"[ERROR] OpenCV read failed for {device_index}: {e}")
+            release_camera(device_index)
 
-        if frame_count[device_index] % FRAME_SKIP != 0:
-            _, buf = cv2.imencode(".jpg", frame)
-            yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buf.tobytes() + b"\r\n")
+            if fail_count >= 3:
+                print(f"[ERROR] Too many failures. Stopping camera: {device_index}")
+                camera_states[device_index] = False
+                break
+
+            time.sleep(1)
             continue
 
-        # Annotated frame has bounding boxes only; classification detail is JSON-only
-        annotated, _ = run_inference(frame, cam_id=device_index)
-        _, buf = cv2.imencode(".jpg", annotated)
-        yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buf.tobytes() + b"\r\n")
+        if not ok or frame is None:
+            fail_count += 1
+            print(f"[WARN] Camera lost: {device_index}, reconnecting...")
+            release_camera(device_index)
 
+            if fail_count >= 3:
+                print(f"[ERROR] Too many failures. Stopping camera: {device_index}")
+                camera_states[device_index] = False
+                break
+
+            time.sleep(1)
+            continue
+
+        fail_count = 0
+
+        frame_count[device_index] = frame_count.get(device_index, 0) + 1
+
+        try:
+            if frame_count[device_index] % FRAME_SKIP != 0:
+                success, buf = cv2.imencode(".jpg", frame)
+            else:
+                annotated, _ = run_inference(frame, cam_id=device_index)
+                success, buf = cv2.imencode(".jpg", annotated)
+
+            if not success:
+                continue
+
+            yield (
+                b"--frame\r\n"
+                b"Content-Type: image/jpeg\r\n\r\n" +
+                buf.tobytes() +
+                b"\r\n"
+            )
+
+        except Exception as e:
+            print(f"[ERROR] Frame processing failed for {device_index}: {e}")
+            time.sleep(0.2)
 
 @app.route("/video_feed")
 def video_feed():
@@ -529,71 +574,72 @@ def serve_crop(fname):
 @app.route("/uploads/<path:fname>")
 def serve_upload(fname):
     return send_from_directory(UPLOAD_DIR, fname)
+def _safe_delete_url_file(url):
+    if not url:
+        return
+
+    try:
+        file_path = os.path.normpath(os.path.join(BASE_DIR, url.lstrip("/")))
+
+        # safety: prevent deleting outside project folder
+        if not file_path.startswith(BASE_DIR):
+            print(f"[WARN] Skipped unsafe delete path: {file_path}")
+            return
+
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            print(f"[DELETE] {file_path}")
+
+    except Exception as e:
+        print(f"[DELETE ERROR] {url}: {e}")
+
 
 def _delete_detection_files(detection_list):
+    deleted = set()
+
     for d in detection_list:
+        urls = []
 
-        # ── DELETE FRAME ─────────────────────────────
-        frame_url = d.get("frame_url")
-        if frame_url:
-            try:
-                frame_path = os.path.join(BASE_DIR, frame_url.lstrip("/"))
-                if os.path.exists(frame_path):
-                    os.remove(frame_path)
-            except Exception as e:
-                print(f"Frame delete error: {e}")
+        urls.append(d.get("crop_url"))
+        urls.append(d.get("frame_url"))
 
-        # ── DELETE CROP ──────────────────────────────
-        crop_url = d.get("crop_url")
-        if crop_url:
-            try:
-                crop_path = os.path.join(BASE_DIR, crop_url.lstrip("/"))
-                if os.path.exists(crop_path):
-                    os.remove(crop_path)
-            except Exception as e:
-                print(f"Crop delete error: {e}")
-
-        # ── DELETE HEATMAPS (IMPORTANT FIX) ─────────
         heatmaps = d.get("heatmaps", {})
-        for url in heatmaps.values():
-            try:
-                heatmap_path = os.path.join(BASE_DIR, url.lstrip("/"))
-                if os.path.exists(heatmap_path):
-                    os.remove(heatmap_path)
-            except Exception as e:
-                print(f"Heatmap delete error: {e}")
+        if isinstance(heatmaps, dict):
+            urls.extend(heatmaps.values())
+
+        for url in urls:
+            if url and url not in deleted:
+                _safe_delete_url_file(url)
+                deleted.add(url)
 
 @app.route("/api/decision", methods=["POST"])
 def handle_decision():
-    data     = request.json
-    det_id   = data.get("id")
+    data = request.json
+    det_id = data.get("id")
     decision = data.get("decision")
 
     if not det_id or decision not in ["accept", "reject"]:
         return jsonify({"error": "Invalid request"}), 400
 
+    removed = []
+
     with json_lock:
         with open(JSON_PATH, "r") as f:
             detections = json.load(f)
 
-        target = next((d for d in detections if d["id"] == det_id), None)
+        target = next((d for d in detections if d.get("id") == det_id), None)
+
         if not target:
             return jsonify({"error": "Not found"}), 404
 
-        frame_url = target.get("frame_url")
-
         if decision == "reject":
-            removed = [d for d in detections if d.get("frame_url") == frame_url]
-            updated = [d for d in detections if d.get("frame_url") != frame_url]
+            removed = [target]
+            detections = [d for d in detections if d.get("id") != det_id]
         else:
-            for d in detections:
-                if d["id"] == det_id:
-                    d["status"] = "accepted"
-            updated = detections
-            removed = []
+            target["status"] = "accepted"
 
         with open(JSON_PATH, "w") as f:
-            json.dump(updated, f, indent=2)
+            json.dump(detections, f, indent=2)
 
     if decision == "reject":
         _delete_detection_files(removed)
@@ -614,7 +660,11 @@ def reject_all():
             json.dump(updated, f, indent=2)
 
     _delete_detection_files(pending)
-    return jsonify({"status": "success", "removed": len(pending)})
+
+    return jsonify({
+        "status": "success",
+        "removed": len(pending)
+    })
 
 @app.route("/api/detection/heatmaps/<det_id>")
 def get_heatmaps(det_id):

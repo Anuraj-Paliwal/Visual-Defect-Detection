@@ -1,1 +1,116 @@
-[]
+[
+  {
+    "id": "831c62ca-d8b1-4e4a-a1ff-629c7b2f0f57",
+    "timestamp": "2026-05-02 09:59:29",
+    "camera_id": "http://192.168.1.12:8080/video",
+    "angle": "top",
+    "class_name": "can",
+    "confidence": 0.855,
+    "status": "accepted",
+    "result": "defective",
+    "cls_label": "defective",
+    "cls_confidence": 0.828,
+    "processed": true,
+    "crop_url": "/crops/434d680f1e7542a39b7a49cbccafe174_crop.jpg",
+    "heatmaps": {
+      "texture": "/crops/434d680f1e7542a39b7a49cbccafe174_texture.jpg",
+      "multi_scale": "/crops/434d680f1e7542a39b7a49cbccafe174_multi.jpg"
+    },
+    "frame_url": "/uploads/f78b2de6869849e085446dc2b5039047.jpg"
+  },
+  {
+    "id": "c65a22e4-a29f-453d-a72f-bc2af134c8e3",
+    "timestamp": "2026-05-02 09:59:29",
+    "camera_id": "http://192.168.1.12:8080/video",
+    "angle": "top",
+    "class_name": "can",
+    "confidence": 0.858,
+    "status": "accepted",
+    "result": "defective",
+    "cls_label": "defective",
+    "cls_confidence": 0.834,
+    "processed": true,
+    "crop_url": "/crops/2ba19fcf618c47cd941214ffccbd5d13_crop.jpg",
+    "heatmaps": {
+      "texture": "/crops/2ba19fcf618c47cd941214ffccbd5d13_texture.jpg",
+      "multi_scale": "/crops/2ba19fcf618c47cd941214ffccbd5d13_multi.jpg"
+    },
+    "frame_url": "/uploads/9d481791e5b9471c875bb834e7b367ae.jpg"
+  },
+  {
+    "id": "025b0dd3-392d-48e6-9d9d-a9e85314235e",
+    "timestamp": "2026-05-02 09:58:39",
+    "camera_id": "http://192.168.1.12:8080/video",
+    "angle": "top",
+    "class_name": "can",
+    "confidence": 0.48,
+    "status": "accepted",
+    "result": "defective",
+    "cls_label": "defective",
+    "cls_confidence": 0.449,
+    "processed": true,
+    "crop_url": "/crops/37ff1ccbe7334254962a38f9272f26d6_crop.jpg",
+    "heatmaps": {
+      "texture": "/crops/37ff1ccbe7334254962a38f9272f26d6_texture.jpg",
+      "multi_scale": "/crops/37ff1ccbe7334254962a38f9272f26d6_multi.jpg"
+    },
+    "frame_url": "/uploads/34236d012e15444a8074ec336c3941ee.jpg"
+  },
+  {
+    "id": "c074f450-7a9f-4330-abfe-b31e7afcd52b",
+    "timestamp": "2026-05-02 09:58:14",
+    "camera_id": "http://192.168.1.12:8080/video",
+    "angle": "top",
+    "class_name": "can",
+    "confidence": 0.575,
+    "status": "accepted",
+    "result": "defective",
+    "cls_label": "defective",
+    "cls_confidence": 0.442,
+    "processed": true,
+    "crop_url": "/crops/eec37b9e01fe4af1a39eb0aed971ec58_crop.jpg",
+    "heatmaps": {
+      "texture": "/crops/eec37b9e01fe4af1a39eb0aed971ec58_texture.jpg",
+      "multi_scale": "/crops/eec37b9e01fe4af1a39eb0aed971ec58_multi.jpg"
+    },
+    "frame_url": "/uploads/55d8ceeef6fb4be293d6e1b783f6e4f5.jpg"
+  },
+  {
+    "id": "03841274-24fc-49ff-92a1-485ecab421a7",
+    "timestamp": "2026-05-02 09:57:07",
+    "camera_id": "http://192.168.1.12:8080/video",
+    "angle": "top",
+    "class_name": "can",
+    "confidence": 0.784,
+    "status": "accepted",
+    "result": "perfect",
+    "cls_label": "positive",
+    "cls_confidence": 0.352,
+    "processed": true,
+    "crop_url": "/crops/3cc6854788ff49ec8283a656032f49d5_crop.jpg",
+    "heatmaps": {
+      "texture": "/crops/3cc6854788ff49ec8283a656032f49d5_texture.jpg",
+      "multi_scale": "/crops/3cc6854788ff49ec8283a656032f49d5_multi.jpg"
+    },
+    "frame_url": "/uploads/f7f659d9c31845dd8c9d1afa8512eda3.jpg"
+  },
+  {
+    "id": "4ffc7612-588e-4579-83d8-f60812d7077c",
+    "timestamp": "2026-05-02 09:57:07",
+    "camera_id": "http://192.168.1.12:8080/video",
+    "angle": "top",
+    "class_name": "can",
+    "confidence": 0.762,
+    "status": "accepted",
+    "result": "perfect",
+    "cls_label": "positive",
+    "cls_confidence": 0.295,
+    "processed": true,
+    "crop_url": "/crops/1d5d64bfb92e435683e7d59db3cc9f41_crop.jpg",
+    "heatmaps": {
+      "texture": "/crops/1d5d64bfb92e435683e7d59db3cc9f41_texture.jpg",
+      "multi_scale": "/crops/1d5d64bfb92e435683e7d59db3cc9f41_multi.jpg"
+    },
+    "frame_url": "/uploads/b16ef8b8c75c4da7a365aefd4154b8d0.jpg"
+  }
+]
